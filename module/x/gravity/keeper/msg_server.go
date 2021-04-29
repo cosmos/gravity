@@ -31,10 +31,12 @@ func (k Keeper) SetDelegateKey(c context.Context, msg *types.MsgDelegateKey) (*t
 	// addresses since no signatures from the private keys of these addresses
 	// are required for this message it could be sent in a hostile way.
 
-	// set the orchestrator address
+	// set the orchestrator address (map[orch]val)
 	k.SetOrchestratorValidator(ctx, validatorAddr, orchestratorAddr)
-	// set the ethereum address
+	// set the ethereum address (map[val]eth)
 	k.SetEthAddress(ctx, validatorAddr, ethereumAddr)
+	// set third index (map[eth]orch)
+	k.SetEthOrchAddress(ctx, ethereumAddr, orchestratorAddr)
 
 	ctx.EventManager().EmitEvent(
 		sdk.NewEvent(
@@ -76,17 +78,12 @@ func (k Keeper) SubmitConfirm(c context.Context, msg *types.MsgSubmitConfirm) (*
 		return nil, sdkerrors.Wrapf(stakingtypes.ErrNoValidatorFound, "orchestrator address %s", orchestratorAddr)
 	}
 
-	ethAddress := k.GetEthAddress(ctx, validatorAddr)
-	if (ethAddress == common.Address{}) {
-		return nil, sdkerrors.Wrap(types.ErrValidatorEthAddressNotFound, validatorAddr.String())
-	}
-
 	confirm, err := types.UnpackConfirm(msg.Confirm)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := k.ConfirmEvent(ctx, confirm, orchestratorAddr, ethAddress); err != nil {
+	if err := k.ConfirmEvent(ctx, confirm, validatorAddr); err != nil {
 		return nil, err
 	}
 
@@ -94,6 +91,7 @@ func (k Keeper) SubmitConfirm(c context.Context, msg *types.MsgSubmitConfirm) (*
 		sdk.NewEvent(
 			sdk.EventTypeMessage,
 			sdk.NewAttribute(sdk.AttributeKeyModule, msg.Type()),
+			sdk.NewAttribute(types.AttributeKeyValidator, validatorAddr.String()),
 			sdk.NewAttribute(types.AttributeKeyConfirmType, confirm.GetType()),
 		),
 	)
