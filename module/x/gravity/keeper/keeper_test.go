@@ -1,206 +1,143 @@
-package keeper
+package keeper_test
 
 import (
-	"bytes"
-	"fmt"
 	"testing"
+	"time"
 
+	"github.com/cosmos/cosmos-sdk/baseapp"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
+	"github.com/cosmos/gravity-bridge/module/app"
 	"github.com/cosmos/gravity-bridge/module/x/gravity/types"
+	"github.com/stretchr/testify/suite"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
-func TestPrefixRange(t *testing.T) {
-	cases := map[string]struct {
-		src      []byte
-		expStart []byte
-		expEnd   []byte
-		expPanic bool
-	}{
-		"normal":              {src: []byte{1, 3, 4}, expStart: []byte{1, 3, 4}, expEnd: []byte{1, 3, 5}},
-		"normal short":        {src: []byte{79}, expStart: []byte{79}, expEnd: []byte{80}},
-		"empty case":          {src: []byte{}},
-		"roll-over example 1": {src: []byte{17, 28, 255}, expStart: []byte{17, 28, 255}, expEnd: []byte{17, 29, 0}},
-		"roll-over example 2": {src: []byte{15, 42, 255, 255},
-			expStart: []byte{15, 42, 255, 255}, expEnd: []byte{15, 43, 0, 0}},
-		"pathological roll-over": {src: []byte{255, 255, 255, 255}, expStart: []byte{255, 255, 255, 255}},
-		"nil prohibited":         {expPanic: true},
-	}
+type KeeperTestSuite struct {
+	suite.Suite
 
-	for testName, tc := range cases {
-		tc := tc
-		t.Run(testName, func(t *testing.T) {
-			if tc.expPanic {
-				require.Panics(t, func() {
-					prefixRange(tc.src)
-				})
-				return
-			}
-			start, end := prefixRange(tc.src)
-			assert.Equal(t, tc.expStart, start)
-			assert.Equal(t, tc.expEnd, end)
-		})
-	}
+	ctx sdk.Context
+	app *app.Gravity
+
+	queryClient types.QueryClient
 }
 
-func TestCurrentValsetNormalization(t *testing.T) {
-	specs := map[string]struct {
-		srcPowers []uint64
-		expPowers []uint64
-	}{
-		"one": {
-			srcPowers: []uint64{100},
-			expPowers: []uint64{4294967295},
-		},
-		"two": {
-			srcPowers: []uint64{100, 1},
-			expPowers: []uint64{4252442866, 42524428},
-		},
-	}
-	input := CreateTestEnv(t)
-	ctx := input.Context
-	for msg, spec := range specs {
-		spec := spec
-		t.Run(msg, func(t *testing.T) {
-			operators := make([]MockStakingValidatorData, len(spec.srcPowers))
-			for i, v := range spec.srcPowers {
-				operators[i] = MockStakingValidatorData{
-					// any unique addr
-					Operator: bytes.Repeat([]byte{byte(i)}, sdk.AddrLen),
-					Power:    int64(v),
-				}
-			}
-			input.GravityKeeper.StakingKeeper = NewStakingKeeperWeightedMock(operators...)
-			r := input.GravityKeeper.GetCurrentValset(ctx)
-			assert.Equal(t, spec.expPowers, types.BridgeValidators(r.Members).GetPowers())
-		})
-	}
+func (suite *KeeperTestSuite) SetupTest() {
+	checkTx := false
+	gravityApp := app.Setup(checkTx)
+
+	suite.ctx = gravityApp.BaseApp.NewContext(checkTx, tmproto.Header{Height: 1})
+	suite.app = gravityApp
+
+	queryHelper := baseapp.NewQueryServerTestHelper(suite.ctx, gravityApp.InterfaceRegistry())
+	types.RegisterQueryServer(queryHelper, gravityApp.GravityKeeper)
+	suite.queryClient = types.NewQueryClient(queryHelper)
 }
 
-func TestAttestationIterator(t *testing.T) {
-	input := CreateTestEnv(t)
-	ctx := input.Context
-	// add some attestations to the store
-
-	att1 := &types.Attestation{
-		Observed: true,
-		Votes:    []string{},
-	}
-	dep1 := &types.DepositClaim{
-		EventNonce:          1,
-		TokenContract:       TokenContractAddrs[0],
-		Amount:              sdk.NewInt(100),
-		EthereumSender:      EthAddrs[0].String(),
-		CosmosReceiver:      AccAddrs[0].String(),
-		OrchestratorAddress: AccAddrs[0].String(),
-	}
-	att2 := &types.Attestation{
-		Observed: true,
-		Votes:    []string{},
-	}
-	dep2 := &types.DepositClaim{
-		EventNonce:          2,
-		TokenContract:       TokenContractAddrs[0],
-		Amount:              sdk.NewInt(100),
-		EthereumSender:      EthAddrs[0].String(),
-		CosmosReceiver:      AccAddrs[0].String(),
-		OrchestratorAddress: AccAddrs[0].String(),
-	}
-	input.GravityKeeper.SetAttestation(ctx, dep1.EventNonce, dep1.ClaimHash(), att1)
-	input.GravityKeeper.SetAttestation(ctx, dep2.EventNonce, dep2.ClaimHash(), att2)
-
-	atts := []types.Attestation{}
-	input.GravityKeeper.IterateAttestaions(ctx, func(_ []byte, att types.Attestation) bool {
-		atts = append(atts, att)
-		return false
-	})
-
-	require.Len(t, atts, 2)
+func TestKeeperTestSuite(t *testing.T) {
+	suite.Run(t, new(KeeperTestSuite))
 }
 
-func TestDelegateKeys(t *testing.T) {
-	input := CreateTestEnv(t)
-	ctx := input.Context
-	k := input.GravityKeeper
-	var (
-		ethAddrs = []string{"0x3146D2d6Eed46Afa423969f5dDC3152DfC359b09",
-			"0x610277F0208D342C576b991daFdCb36E36515e76", "0x835973768750b3ED2D5c3EF5AdcD5eDb44d12aD4",
-			"0xb2A7F3E84F8FdcA1da46c810AEa110dd96BAE6bF"}
-
-		valAddrs = []string{"cosmosvaloper1jpz0ahls2chajf78nkqczdwwuqcu97w6z3plt4",
-			"cosmosvaloper15n79nty2fj37ant3p2gj4wju4ls6eu6tjwmdt0", "cosmosvaloper16dnkc6ac6ruuyr6l372fc3p77jgjpet6fka0cq",
-			"cosmosvaloper1vrptwhl3ht2txmzy28j9msqkcvmn8gjz507pgu"}
-
-		orchAddrs = []string{"cosmos1g0etv93428tvxqftnmj25jn06mz6dtdasj5nz7", "cosmos1rhfs24tlw4na04v35tzmjncy785kkw9j27d5kx",
-			"cosmos10upq3tmt04zf55f6hw67m0uyrda3mp722q70rw", "cosmos1nt2uwjh5peg9vz2wfh2m3jjwqnu9kpjlhgpmen"}
-	)
-
-	for i := range ethAddrs {
-		// set some addresses
-		val, err1 := sdk.ValAddressFromBech32(valAddrs[i])
-		orch, err2 := sdk.AccAddressFromBech32(orchAddrs[i])
-		require.NoError(t, err1)
-		require.NoError(t, err2)
-		// set the orchestrator address
-		k.SetOrchestratorValidator(ctx, val, orch)
-		// set the ethereum address
-		k.SetEthAddress(ctx, val, ethAddrs[i])
-	}
-
-	addresses := k.GetDelegateKeys(ctx)
-	for i := range addresses {
-		res := addresses[i]
-		assert.Equal(t, valAddrs[i], res.Validator)
-		assert.Equal(t, orchAddrs[i], res.Orchestrator)
-		assert.Equal(t, ethAddrs[i], res.EthAddress)
-	}
-
+func (suite *KeeperTestSuite) TestBridgeIDCRUD() {
+	id := []byte("id")
+	suite.app.GravityKeeper.SetBridgeID(suite.ctx, id)
+	returnedID := suite.app.GravityKeeper.GetBridgeID(suite.ctx)
+	suite.Require().Equal(id, returnedID)
 }
 
-func TestLastSlashedValsetNonce(t *testing.T) {
-	input := CreateTestEnv(t)
-	k := input.GravityKeeper
-	ctx := input.Context
+func (suite *KeeperTestSuite) TestEthAddressCRUD() {
+	cosmosAddr, err := types.GenerateTestCosmosAddress()
+	suite.Require().NoError(err)
+	valAddr, err := sdk.ValAddressFromHex(cosmosAddr.String())
+	suite.Require().NoError(err)
+	ethAddr, err := types.GenerateTestEthAddress()
+	suite.Require().NoError(err)
 
-	vs := k.GetCurrentValset(ctx)
+	suite.app.GravityKeeper.SetEthAddress(suite.ctx, valAddr, *ethAddr)
+	returnedEthAddr := suite.app.GravityKeeper.GetEthAddress(suite.ctx, valAddr)
+	suite.Require().Equal(ethAddr, returnedEthAddr, "didn't receive set ethereum address")
+}
 
-	i := 1
-	for ; i < 10; i++ {
-		vs.Height = uint64(i)
-		vs.Nonce = uint64(i)
-		k.StoreValsetUnsafe(ctx, vs)
-	}
+func (suite *KeeperTestSuite) TestOrchestratorValidatorCRUD() {
+	cosmosAddr, err := types.GenerateTestCosmosAddress()
+	suite.Require().NoError(err)
+	valAddr, err := sdk.ValAddressFromHex(cosmosAddr.String())
+	suite.Require().NoError(err)
+	cosmosAddr2, err := types.GenerateTestCosmosAddress()
+	suite.Require().NoError(err)
+	orchAddr, err := sdk.AccAddressFromHex(cosmosAddr2.String())
+	suite.Require().NoError(err)
 
-	latestValsetNonce := k.GetLatestValsetNonce(ctx)
-	assert.Equal(t, latestValsetNonce, uint64(i-1))
+	suite.app.GravityKeeper.SetOrchestratorValidator(suite.ctx, valAddr, orchAddr)
+	returnedEthAddr := suite.app.GravityKeeper.GetOrchestratorValidator(suite.ctx, orchAddr)
+	suite.Require().Equal(valAddr, returnedEthAddr, "didn't receive set validator address")
+}
 
-	//  lastSlashedValsetNonce should be zero initially.
-	lastSlashedValsetNonce := k.GetLastSlashedValsetNonce(ctx)
-	assert.Equal(t, lastSlashedValsetNonce, uint64(0))
-	unslashedValsets := k.GetUnSlashedValsets(ctx, uint64(12))
-	assert.Equal(t, len(unslashedValsets), 9)
+func (suite *KeeperTestSuite) TestEthereumInfoCRUD() {
+	ethInfo := types.EthereumInfo{Timestamp: time.Now(), Height: 10}
 
-	// check if last Slashed Valset nonce is set properly or not
-	k.SetLastSlashedValsetNonce(ctx, uint64(3))
-	lastSlashedValsetNonce = k.GetLastSlashedValsetNonce(ctx)
-	assert.Equal(t, lastSlashedValsetNonce, uint64(3))
+	suite.app.GravityKeeper.SetEthereumInfo(suite.ctx, ethInfo)
+	returnedEthInfo, ok := suite.app.GravityKeeper.GetEthereumInfo(suite.ctx)
+	suite.Require().True(ok, "no ethereum info located")
+	suite.Require().Equal(ethInfo, returnedEthInfo, "didn't receive set ethereum info")
+}
 
-	// when maxHeight < lastSlashedValsetNonce, len(unslashedValsets) should be zero
-	unslashedValsets = k.GetUnSlashedValsets(ctx, uint64(2))
-	assert.Equal(t, len(unslashedValsets), 0)
+func (suite *KeeperTestSuite) TestLastObservedEventNonceCRUD() {
+	nonce := uint64(13)
 
-	// when maxHeight == lastSlashedValsetNonce, len(unslashedValsets) should be zero
-	unslashedValsets = k.GetUnSlashedValsets(ctx, uint64(3))
-	assert.Equal(t, len(unslashedValsets), 0)
+	suite.app.GravityKeeper.SetLastObservedEventNonce(suite.ctx, nonce)
+	returnedEventNonce := suite.app.GravityKeeper.GetLastObservedEventNonce(suite.ctx)
+	suite.Require().Equal(nonce, returnedEventNonce, "didn't receive set event nonce")
+}
 
-	// when maxHeight > lastSlashedValsetNonce && maxHeight <= latestValsetNonce
-	unslashedValsets = k.GetUnSlashedValsets(ctx, uint64(6))
-	assert.Equal(t, len(unslashedValsets), 2)
+func (suite *KeeperTestSuite) TestTransferTxCRUD() {
+	amount := sdk.Coin{Denom: "testdenom", Amount: sdk.NewIntFromUint64(100)}
+	fee := sdk.Coin{Denom: "testdenom", Amount: sdk.NewIntFromUint64(12)}
+	tx := types.TransferTx{Nonce: 13, Sender: "sender", EthereumRecipient: "recipient", Erc20Token: amount, Erc20Fee: fee}
 
-	// when maxHeight > latestValsetNonce
-	unslashedValsets = k.GetUnSlashedValsets(ctx, uint64(15))
-	assert.Equal(t, len(unslashedValsets), 6)
-	fmt.Println("unslashedValsetsRange", unslashedValsets)
+	txid := suite.app.GravityKeeper.SetTransferTx(suite.ctx, tx)
+	returnedTx, ok := suite.app.GravityKeeper.GetTransferTx(suite.ctx, txid)
+	suite.Require().True(ok, "no transfer tx located")
+	suite.Require().Equal(tx, returnedTx, "didn't receive set transfer transaction")
+
+	suite.app.GravityKeeper.DeleteTransferTx(suite.ctx, txid)
+	_, ok = suite.app.GravityKeeper.GetTransferTx(suite.ctx, txid)
+	suite.Require().True(ok, "deleted transfer tx was returned")
+}
+
+func (suite *KeeperTestSuite) TestGetTransferTxs() {
+	amount := sdk.Coin{Denom: "testdenom", Amount: sdk.NewIntFromUint64(100)}
+	fee := sdk.Coin{Denom: "testdenom", Amount: sdk.NewIntFromUint64(12)}
+	tx0 := types.TransferTx{Nonce: 13, Sender: "sender1", EthereumRecipient: "recipient1", Erc20Token: amount, Erc20Fee: fee}
+	tx1 := types.TransferTx{Nonce: 13, Sender: "sender2", EthereumRecipient: "recipient2", Erc20Token: amount, Erc20Fee: fee}
+	tx2 := types.TransferTx{Nonce: 13, Sender: "sender3", EthereumRecipient: "recipient3", Erc20Token: amount, Erc20Fee: fee}
+
+	suite.app.GravityKeeper.SetTransferTx(suite.ctx, tx0)
+	suite.app.GravityKeeper.SetTransferTx(suite.ctx, tx1)
+	suite.app.GravityKeeper.SetTransferTx(suite.ctx, tx2)
+
+	txs := suite.app.GravityKeeper.GetTransferTxs(suite.ctx)
+	suite.Require().Len(txs, 3, "incorrect number of responses")
+	suite.Require().Equal(tx0, txs[0], "incorrect transaction returned")
+	suite.Require().Equal(tx1, txs[1], "incorrect transaction returned")
+	suite.Require().Equal(tx2, txs[2], "incorrect transaction returned")
+}
+
+func (suite *KeeperTestSuite) TestEthereumEventCRUD() {
+	id := []byte("testid")
+	event := types.DepositEvent{Nonce: 20, TokenContract: "contract", Amount: sdk.NewInt(30), EthereumSender: "sender", CosmosReceiver: "receiver", EthereumHeight: 40}
+
+	suite.app.GravityKeeper.SetEthereumEvent(suite.ctx, id, &event)
+	returnedEvent, ok := suite.app.GravityKeeper.GetEthereumEvent(suite.ctx, id)
+	suite.Require().True(ok, "set ethereum event was not returned")
+	suite.Require().Equal(event, returnedEvent)
+}
+
+func (suite *KeeperTestSuite) TestConfirmCRUD() {
+	id := []byte("testid")
+	confirm := types.ConfirmLogicCall{InvalidationID: []byte("invitationID"), InvalidationNonce: 10, EthSigner: "signer", OrchestratorAddress: "orchestrator", Signature: []byte("signature")}
+
+	suite.app.GravityKeeper.SetConfirm(suite.ctx, id, &confirm)
+	returnedConfirm, ok := suite.app.GravityKeeper.GetConfirm(suite.ctx, id)
+	suite.Require().True(ok, "set ethereum confirm was not returned")
+	suite.Require().Equal(confirm, returnedConfirm)
 }

@@ -1,57 +1,49 @@
 package types
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenesisStateValidate(t *testing.T) {
-	specs := map[string]struct {
-		src    *GenesisState
-		expErr bool
-	}{
-		"default params": {src: DefaultGenesisState(), expErr: false},
-		"empty params":   {src: &GenesisState{Params: &Params{}}, expErr: true},
-		"invalid params": {src: &GenesisState{
-			Params: &Params{
-				GravityId:             "foo",
-				ContractSourceHash:    "laksdjflasdkfja",
-				BridgeEthereumAddress: "invalid-eth-address",
-				BridgeChainId:         3279089,
-			},
-		}, expErr: true},
-	}
-	for msg, spec := range specs {
-		t.Run(msg, func(t *testing.T) {
-			err := spec.src.ValidateBasic()
-			if spec.expErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-		})
+func generateTestGenesisState() GenesisState {
+	bridgeID := make([]byte, BridgeIDLen)
+	rand.Read(bridgeID)
+
+	return GenesisState{
+		BridgeID:          bridgeID,
+		Params:            DefaultParams(),
+		LastObservedNonce: 10,
+		SignerSets:        []EthSignerSet{},
+		BatchTxs:          []BatchTx{},
+		LogicCallTxs:      []IdentifiedLogicCall{},
+		TransferTxs:       []TransferTx{},
+		Confirms:          []IdentifiedConfirm{},
+		Attestations:      []IdentifiedAttestation{},
+		DelegateKeys:      []MsgDelegateKey{},
+		Erc20ToDenoms:     []ERC20ToDenom{},
 	}
 }
 
-func TestStringToByteArray(t *testing.T) {
-	specs := map[string]struct {
-		testString string
-		expErr     bool
+func TestGenesisState_ValidateBasic(t *testing.T) {
+	bridgeID := make([]byte, BridgeIDLen)
+	rand.Read(bridgeID)
+
+	testCases := []struct {
+		name     string
+		state    GenesisState
+		expError bool
 	}{
-		"16 bytes": {"lakjsdflaksdjfds", false},
-		"32 bytes": {"lakjsdflaksdjfdslakjsdflaksdjfds", false},
-		"33 bytes": {"€€€€€€€€€€€", true},
+		{"valid input", generateTestGenesisState(), false},
 	}
 
-	for msg, spec := range specs {
-		t.Run(msg, func(t *testing.T) {
-			_, err := strToFixByteArray(spec.testString)
-			if spec.expErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-		})
+	for _, tc := range testCases {
+		err := tc.state.ValidateBasic()
+		if tc.expError {
+			require.Error(t, err, tc.name)
+		} else {
+			require.NoError(t, err, tc.name)
+		}
 	}
 }
